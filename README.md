@@ -20,5 +20,7 @@ The mapping of ADC ID+Channel into ROOT branches is accomplished with a CSV file
 
 The ADC ID and Channel number correspond to parameters set in the DAQ setup. The branch name specifioes the branch in the ROOT tree into which data with the corresponding ID and channel number are stored.
 
+*Warning* - the map file contains no way to comment. The only thing ignored is the first line of the file.
+
 # ROOT Tree Structure
 Each branch in the tree is a `vector<unsigned int>`. Successive entries in each vector correspond to successive "hits" in a given ADC+Channel. For a given event, vectors will be empty if there were no hits in that channel.

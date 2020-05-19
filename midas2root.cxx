@@ -404,12 +404,12 @@ void m2r::MidasInput::SimulateTreat(int event, int cmin , int cmax, int vmin,int
 void midas2root(const string& midas_file,
 								const string& root_file,
 								const string& channel_map_file,
-								int base, int offset)
+								int adc_base = 32, int adc_offset = 992)
 {
 	m2r::MidasInput mi;
 	mi.SetFileName(midas_file);
 	mi.SetOutputFile(root_file);
-	mi.SetADCBaseOffset(base,offset);
+	mi.SetADCBaseOffset(adc_base,adc_offset);
 	mi.ReadChannelMap(channel_map_file);
 	mi.TreatFile();
 	mi.CloseOutputFile();

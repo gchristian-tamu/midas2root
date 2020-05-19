@@ -92,6 +92,7 @@ private:
 	unsigned int m_blocks;
 	unsigned int m_events;
 	unsigned int m_bytes_read;
+	std::map<int, long long> m_UnmappedAddresses;
 };
 }
 
@@ -132,10 +133,9 @@ void m2r::MidasInput::CloseOutputFile(){
 }
 ////////////////////////////////////////////////////////////////////////////////
 void m2r::MidasInput::ClearEvent(){
-	auto doClear = [](pair<const int, vector<double>* > &p)
-		{ p.second->clear(); };
-	for_each(m_ChannelMap.begin(),m_ChannelMap.end(),
-					 doClear);
+	for(auto& p : m_ChannelMap){
+		if(p.second){	p.second->clear(); }
+	}
 }
 ////////////////////////////////////////////////////////////////////////////////
 void m2r::MidasInput::ReadChannelMap(const std::string& filename){
@@ -149,7 +149,9 @@ void m2r::MidasInput::ReadChannelMap(const std::string& filename){
 		exit(1);
 	}
 	auto tokenizeLine = [](const string& line){
-		unique_ptr<TObjArray> tokens ( TString(line).Tokenize(",") );
+		TString tsLine(line);
+		tsLine.ReplaceAll("\n","");
+		unique_ptr<TObjArray> tokens ( tsLine.Tokenize(",") );
 		tokens->SetOwner(true); // required for auto-deleting elements
 		vector<string> out(tokens->GetEntries());
 		for(int i=0;i<tokens->GetEntries();++i){
@@ -167,17 +169,20 @@ void m2r::MidasInput::ReadChannelMap(const std::string& filename){
 			cerr << "ERROR (midas2root.cxx): Bad line at line no. " << linenum <<
 				" in file " << filename << ", skipping...\n";
 		}
-		int address = ADCChannelToAddress(std::atoi(elements[1].c_str()),std::atoi(elements[2].c_str()));
+		int adc = atoi(elements.at(1).c_str());
+		int channel = atoi(elements.at(2).c_str());
+		int address = ADCChannelToAddress(adc,channel);
 		if(m_ChannelMap.find(address) != m_ChannelMap.end()){
 			cerr << "WARNING (midas2root.cxx): Duplicate entry at line " << linenum <<
 				" in file " << filename << ", ignoring and keeping the EARLIER one...";
 		} else {
 			vector<double> *vb=0;
-			m_Tree->Branch(elements[0].c_str(),&vb);
 			auto emp = m_ChannelMap.emplace(address, vb);
 			assert(emp.second);
-			cout << "Created branch << \"" << elements[0] << "\" for (ADC,CHANNEL,ADDRESS) = ("
-					 << elements[1] << ", " << elements[2] << ", " << address << ")...\n";
+			m_Tree->Branch(elements[0].c_str(), &(emp.first->second));
+
+			cout << "Created branch \"" << elements.at(0) << "\" for (ADC,CHANNEL,ADDRESS) = ("
+					 << adc << ", " << channel << ", " << address << ")...\n";
 		}
 		++linenum;
 	};
@@ -188,8 +193,12 @@ void m2r::MidasInput::FillHit(int address, unsigned short int value){
 	if(it != m_ChannelMap.end()){
 		it->second->push_back(value);
 	} else {
-		cerr << "ERROR (midas2root.cxx): Found un-mapped channel at address: " <<
-			address << ", skipping...\n";
+		auto it = m_UnmappedAddresses.find(address);
+		if(it == m_UnmappedAddresses.end()){
+			m_UnmappedAddresses.emplace(address, 1);
+		} else {
+			++(it->second);
+		}
 	}
 }
 ////////////////////////////////////////////////////////////////////////////////
@@ -297,6 +306,7 @@ bool m2r::MidasInput::ReadBlock(ifstream& fin){
     // read the first word
     whole = ReadWord(fin);
     unsigned short int ctrl = whole & BitMask(14,15) >> 14;
+
     if(ctrl == 3){ // begin of event or end of block
       unsigned short int check1 = (whole & BitMask(8,13))>>8;
       unsigned short int check2 = (whole & BitMask(0,7));
@@ -307,10 +317,10 @@ bool m2r::MidasInput::ReadBlock(ifstream& fin){
           return true;
         }
         else{ // begin of event (end of previous event)
-          m_Tree->Fill();
-          ClearEvent(); //m_DetectorManager->Clear();
-          if(m_events++%5000 ==0)
-            cout << "\r Blocks treated: " << m_blocks << "\t Event treated: " << m_events;
+					m_Tree->Fill();
+					ClearEvent(); //m_DetectorManager->Clear();
+          if(m_events++%1000 ==0)
+            cout << "\rBlocks treated: " << m_blocks << "\t Event treated: " << m_events; flush(cout);
         }
       }
       else{
@@ -324,8 +334,8 @@ bool m2r::MidasInput::ReadBlock(ifstream& fin){
       group=address & 0x00ff;
       item=address >> 8 & 0x003f;
       address = 32 * (group - 1) + item;
-
-      FillHit(address,Swap(value)); // m_DetectorManager->Fill(address,Swap(value));
+			
+			FillHit(address,Swap(value)); // m_DetectorManager->Fill(address,Swap(value));
     }
 
     else if(ctrl == 1){ // Group data item
@@ -366,16 +376,26 @@ void m2r::MidasInput::TreatFile(){
   }
   else{
     cout << "**** Treating MIDAS file " << m_FileName << " ****" << endl;
-    cout << "\r------------------------Starting Process-------------------------" << endl;
+    cout << "------------------------Starting Process-------------------------" << endl;
   }
   while(ReadBlock(fin)){
     // Read all the block. ReadBlock return false on eof
   }
-  cout << "\r----------------------Processed All Blocks-----------------------" << endl;
+  cout << "----------------------Processed All Blocks-----------------------" << endl;
   cout << "Treated blocks: " << m_blocks << "\t Treated Events: " << m_events << endl;
 
 	m_Tree->Write();
   fin.close();
+
+	if(m_UnmappedAddresses.empty()){
+		cout << "No un-mapped addresses encountered...\n";
+	} else {
+		cout << "Encountered un-mapped addresses (address, number events)::\n";
+		for(auto& u : m_UnmappedAddresses){
+			cout << "\t" << u.first << ", " << u.second << "\n";
+		}
+	}
+	cout << "-----------------------\n";
 }
 ////////////////////////////////////////////////////////////////////////////////
 void m2r::MidasInput::SimulateTreat(int event, int cmin , int cmax, int vmin,int vmax){
@@ -388,7 +408,7 @@ void m2r::MidasInput::SimulateTreat(int event, int cmin , int cmax, int vmin,int
     int value;
     ClearEvent();//m_DetectorManager->Clear();
     if(count%500==0)
-      cout <<"\r **** Simulating treat : " << count*100.0/event  << "% ****" ;
+      cout <<" **** Simulating treat : " << count*100.0/event  << "% ****" ;
     // Random channel
     channel = rand.Uniform(cmin,cmax);
 
@@ -414,4 +434,3 @@ void midas2root(const string& midas_file,
 	mi.TreatFile();
 	mi.CloseOutputFile();
 }
-int main(){return 0;}
